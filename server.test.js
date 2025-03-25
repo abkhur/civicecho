@@ -1,4 +1,6 @@
 // server.test.js
+const mongoose = require('mongoose');
+
 require('dotenv').config();
 jest.setTimeout(15000); // Increase timeout to 15 seconds
 const request = require('supertest');
@@ -27,7 +29,11 @@ describe('CivicEcho API Integration Tests', () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toHaveProperty('emailContent');
 
+    
     // Optionally, log the generated email content for manual verification.
     console.log("Generated Email Content:", response.body.emailContent);
   });
+    afterAll(async () => {
+        await mongoose.disconnect();
+    });
 });

@@ -4,12 +4,16 @@ const { generateEmailForBill } = require('./utils/generateEmailForBill');
 const { fetchBillDetails } = require('./utils/fetchBill'); // (if still needed elsewhere)
 const { getDistrictFromAddress } = require('./utils/getDistrict');
 const { getRepresentative } = require('./utils/getRepresentative');
+const { connectDB } = require('./utils/db');
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
+
+//connect to mongodb
+connectDB();
 
 app.post('/generate-email', async (req, res) => {
   const { congress, billType, billNumber, userName, userStance, street, city, state, zipCode } = req.body;
