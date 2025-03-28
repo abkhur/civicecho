@@ -1,63 +1,72 @@
 // utils/getDistrict.js
 const axios = require('axios');
+const { stateFipsMap } = require('./stateFipsMap');
 
 /**
- * Get the congressional district for a given address using the Census Geocoder API with geoLookup.
+ * Convert an address to a congressional district using Nominatim and TIGERweb.
  *
- * @param {string} street - The street address.
- * @param {string} city - The city.
- * @param {string} state - The state (e.g., "VA").
- * @param {string} zipCode - The ZIP code.
- * @returns {Promise<Object>} - An object containing the state and district.
+ * @param {string} street
+ * @param {string} city
+ * @param {string} state
+ * @param {string} zipCode
+ * @returns {Promise<Object>} - Object with state (abbreviation) and district
  */
 async function getDistrictFromAddress(street, city, state, zipCode) {
   if (!street || !city || !state || !zipCode) {
     throw new Error("Street, city, state, and ZIP code are required.");
   }
-  
-  // Construct the API URL using the "geographies" return type with geoLookup,
-  // benchmark=Public_AR_Current, vintage=Current_Current, format=json, and layers=54.
-  const url = `https://geocoding.geo.census.gov/geocoder/geographies/address?street=${encodeURIComponent(street)}&city=${encodeURIComponent(city)}&state=${encodeURIComponent(state)}&zip=${encodeURIComponent(zipCode)}&benchmark=Public_AR_Current&vintage=Current_Current&format=json&layers=54`;
-  
+
   try {
-    const response = await axios.get(url);
-    const result = response.data.result;
-    if (!result) {
-      throw new Error("No result found in the response.");
+    // 1. Geocode with Nominatim
+    const fullAddress = `${street}, ${city}, ${state} ${zipCode}`;
+    const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(fullAddress)}`;
+
+    const geoRes = await axios.get(nominatimUrl, {
+      headers: {
+        'User-Agent': 'CivicEchoBot/1.0 (your_email@example.com)' // replace w/ real info
+      }
+    });
+
+    if (!geoRes.data || geoRes.data.length === 0) {
+      throw new Error("No results from Nominatim geocoding.");
     }
-    
-    // Use the first address match
-    const matches = result.addressMatches;
-    if (!matches || matches.length === 0) {
-      throw new Error("No address matches found in the response.");
+
+    const { lat, lon } = geoRes.data[0];
+
+    // 2. Query TIGERweb
+    const tigerUrl = `https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Legislative/MapServer/0/query`;
+    const tigerParams = {
+      f: 'json',
+      geometry: `${lon},${lat}`,
+      geometryType: 'esriGeometryPoint',
+      inSR: '4326',
+      spatialRel: 'esriSpatialRelIntersects',
+      outFields: 'STATE,CD119,NAME',
+      returnGeometry: false
+    };
+
+    const tigerRes = await axios.get(tigerUrl, { params: tigerParams });
+
+    const features = tigerRes.data?.features;
+    if (!features || features.length === 0) {
+      throw new Error("No congressional district found for these coordinates.");
     }
-    
-    const geographies = matches[0].geographies;
-    if (!geographies) {
-      throw new Error("No geographies found in the address match.");
+
+    const districtInfo = features[0].attributes;
+    const fipsCode = districtInfo.STATE;
+    const stateAbbr = stateFipsMap[fipsCode];
+
+    if (!stateAbbr) {
+      throw new Error(`No state abbreviation found for FIPS code: ${fipsCode}`);
     }
-    
-    // Log available geography keys for debugging purposes.
-    console.log("Available geography keys:", Object.keys(geographies));
-    
-    // Find the key that includes "Congressional Districts"
-    const cdKey = Object.keys(geographies).find(key => key.includes("Congressional Districts"));
-    if (!cdKey) {
-      throw new Error("No congressional district data found in the response.");
-    }
-    
-    const districts = geographies[cdKey];
-    if (districts && districts.length > 0) {
-      const districtData = districts[0];
-      return {
-        state: districtData.STATE,
-        district: districtData.CD119 || districtData.CONGDIST,
-      };
-    } else {
-      throw new Error("No congressional district data found in the response.");
-    }
+
+    return {
+      state: stateAbbr,
+      district: districtInfo.CD119.padStart(2, '0'),
+      districtName: districtInfo.NAME
+    };
   } catch (error) {
-    console.error("Error fetching district from Census API:", error.message);
+    console.error("Error in getDistrictFromAddress:", error.message);
     throw error;
   }
 }

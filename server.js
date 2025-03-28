@@ -28,14 +28,23 @@ app.post('/generate-email', async (req, res) => {
     // Get district info and then representative details
     const districtInfo = await getDistrictFromAddress(street, city, state, zipCode);
     const districtNumber = parseInt(districtInfo.district, 10);
-    const repInfo = await getRepresentative(state, districtNumber);
+    const repInfo = await getRepresentative(districtInfo.state, districtNumber);
+
     
     // Generate the email content using the summary from the summaries endpoint.
     const emailContent = await generateEmailForBill(congress, billType, billNumber, userName, userStance, repInfo);
     res.status(200).json({ emailContent });
   } catch (error) {
     console.error("Error in /generate-email route:", error);
-    res.status(500).json({ error: 'Failed to generate email.' });
+    let message = 'Failed to generate email.';
+    
+    if (error.message.includes("No representative")) {
+      message = "We couldn't find a representative for the given address. Please double-check your details.";
+    } else if (error.message.includes("No address matches")) {
+      message = "Address not found. Please enter a valid U.S. address.";
+    }
+  
+    res.status(500).json({ error: message });
   }
 });
 

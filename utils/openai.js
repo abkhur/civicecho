@@ -49,8 +49,9 @@ async function generateEmail(billSummary, billTitle, userName, userStance, repIn
 
     return response.data.choices[0].message.content;
   } catch (error) {
-    console.error("Error generating email:", error);
-    throw new Error("Failed to generate email using OpenAI API.");
+    console.error(`OpenAI attempt ${attempt} failed:`, error.message);
+    if (attempt === 3) throw new Error('Failed to generate email after multiple attempts.');
+    await new Promise(res => setTimeout(res, 1000)); // wait before retry
   }
 }
 
