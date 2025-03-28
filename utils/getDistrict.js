@@ -23,7 +23,7 @@ async function getDistrictFromAddress(street, city, state, zipCode) {
 
     const geoRes = await axios.get(nominatimUrl, {
       headers: {
-        'User-Agent': 'CivicEchoBot/1.0 (your_email@example.com)' // replace w/ real info
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:136.0) Gecko/20100101 Firefox/136.0'
       }
     });
 
