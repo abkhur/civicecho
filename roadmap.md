@@ -6,8 +6,8 @@
 
 - [x] OpenAI email generation using GPT-3.5
 - [x] Auto-detect representative from user’s address
+- [X] Basic UI: input for user name, zip, stance, etc.
 - [-] Email form automation for federal representatives
-- [ ] Browser extension (Chrome + Firefox)
 
 ---
 
@@ -20,7 +20,6 @@
   - [ ] “Explain it like I’m 10”
   - [ ] “Explain it like I took civics”
   - [ ] “Explain it like I have a PhD in policy”
-- [ ] Basic UI: input for user name, zip, stance, etc.
 - [ ] Add developer docs for contributors
 
 ---
