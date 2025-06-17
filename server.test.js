@@ -1,10 +1,9 @@
-// server.test.js
 const mongoose = require('mongoose');
-
-require('dotenv').config();
-jest.setTimeout(15000); // Increase timeout to 15 seconds
 const request = require('supertest');
 const app = require('./server');
+require('dotenv').config();
+
+jest.setTimeout(15000); // Increase timeout to 15 seconds
 
 describe('CivicEcho API Integration Tests', () => {
   test('POST /generate-email returns generated email content', async () => {
@@ -14,10 +13,10 @@ describe('CivicEcho API Integration Tests', () => {
       billNumber: 1161,
       userName: "Test User",
       userStance: "against",
-      street: "800 Drillfield Dr",  // Example street address
-      city: "Blacksburg",       // Example city
-      state: "VA",            // Example state
-      zipCode: "24061"        // Example ZIP code
+      street: "800 Drillfield Dr",
+      city: "Blacksburg",
+      state: "VA",
+      zipCode: "24061"
     };
 
     const response = await request(app)
@@ -25,15 +24,32 @@ describe('CivicEcho API Integration Tests', () => {
       .send(payload)
       .set('Accept', 'application/json');
 
-    // Check that we got a 200 status code and an emailContent property in the response
     expect(response.statusCode).toBe(200);
     expect(response.body).toHaveProperty('emailContent');
-
-    
-    // Optionally, log the generated email content for manual verification.
     console.log("Generated Email Content:", response.body.emailContent);
   });
-    afterAll(async () => {
-        await mongoose.disconnect();
-    });
+
+  test('POST /get-contact-page returns a valid contact page URL for a given address', async () => {
+    const payload = {
+      street: "800 Drillfield Dr",
+      city: "Blacksburg",
+      state: "VA",
+      zipCode: "24061"
+    };
+
+    const response = await request(app)
+      .post('/get-contact-page')
+      .send(payload)
+      .set('Accept', 'application/json');
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toHaveProperty('contactPage');
+    expect(typeof response.body.contactPage).toBe('string');
+    expect(response.body.contactPage).toMatch(/^https?:\/\//);
+    console.log("Contact Page:", response.body.contactPage);
+  });
+
+  afterAll(async () => {
+    await mongoose.disconnect();
+  });
 });

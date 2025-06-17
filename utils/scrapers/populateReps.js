@@ -3,21 +3,7 @@ const mongoose = require('mongoose');
 const cheerio = require('cheerio');
 require('dotenv').config();
 
-const repSchema = new mongoose.Schema({
-  state: String,
-  district: String,
-  name: String,
-  party: String,
-  office: String,
-  phone: String,
-  email: String,
-  committee: String,
-  website: String,
-  contactPage: String,
-}, { timestamps: true });
-
-repSchema.index({ name: 1, state: 1, district: 1 }, { unique: true });
-const Representative = mongoose.model('Representative', repSchema);
+const Representative = require('../models/Representative'); 
 
 // Only valid U.S. states
 const validStates = new Set([
@@ -51,46 +37,48 @@ async function findContactPage(websiteUrl) {
       const normalized = normalizeUrl(fullUrl);
 
       let score = 0;
+      let isSimple = false;
+
       if (/\/contact(-us)?\/?$/.test(href)) score += 10;
       if (/email-me|write/.test(href)) score += 5;
       if (/newsletter|press|media|zip_auth/.test(href)) score -= 20;
       if (/contact/.test(href)) score += 5;
 
-      // Try fetching the contact page itself to inspect form
       try {
         const contactRes = await axios.get(normalized, { timeout: 3000 });
         const $$ = cheerio.load(contactRes.data);
 
-        if ($$('form').length > 0) score += 10;
+        const form = $$('form');
+        if (form.length > 0) score += 10;
 
-        const inputs = $$('input, textarea, label').toArray();
-        const hasEmailField = inputs.some(el => {
-          const text = $$(el).attr('name') || $$(el).attr('id') || $$(el).text();
-          return /email|message|name/i.test(text);
-        });
-        if (hasEmailField) score += 10;
+        const inputs = $$('input, textarea, select, label').toArray();
 
-        const hasRequired = $$('label').toArray().some(el =>
-          /required|message/i.test($$(el).text())
+        const hasBasicFields = ['name', 'email', 'message', 'subject'].some(field =>
+          inputs.some(el => {
+            const attr = $$(el).attr('name') || $$(el).attr('id') || $$(el).text();
+            return attr.toLowerCase().includes(field);
+          })
         );
-        if (hasRequired) score += 5;
-      } catch (e) {
+
+        if (form.length === 1 && hasBasicFields) {
+          isSimple = true;
+          score += 20;
+        }
+      } catch {
         score -= 10;
       }
 
-      scoredLinks.push({ url: normalized, score });
+      scoredLinks.push({ url: normalized, score, simple: isSimple });
     }
 
-    // Return highest scoring URL
     const best = scoredLinks.sort((a, b) => b.score - a.score)[0];
-    return best?.url || '';
+    return best ? { url: best.url, simple: best.simple } : { url: '', simple: false };
 
   } catch (err) {
     console.warn(`⚠️ Failed to fetch contact page for ${websiteUrl}: ${err.message}`);
-    return '';
+    return { url: '', simple: false };
   }
 }
-
 
 function normalizeUrl(url) {
   try {
@@ -157,16 +145,20 @@ async function populateReps(clearDb = false) {
 
     for (const rep of reps) {
       if (rep.website) {
-        rep.contactPage = await findContactPage(rep.website);
-        console.log(`→ ${rep.name} → ${rep.contactPage || 'No contact page found'}`);
+        const { url, simple } = await findContactPage(rep.website);
+        rep.contactPage = url;
+        rep.simple = simple;
+    
+        console.log(`→ ${rep.name} → ${url || 'No contact page found'}${simple ? ' (simple)' : ''}`);
       }
-
+    
       await Representative.updateOne(
         { name: rep.name, state: rep.state, district: rep.district },
         { $set: rep },
         { upsert: true }
       );
     }
+    
 
     console.log(`Done processing ${reps.length} representatives.`);
     await mongoose.disconnect();

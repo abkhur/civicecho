@@ -5,6 +5,8 @@ const { generateEmailForBill } = require('./utils/generateEmailForBill');
 const { getDistrictFromAddress } = require('./utils/getDistrict');
 const { getRepresentative } = require('./utils/getRepresentative');
 const { connectDB } = require('./utils/db');
+const { getContactPage } = require('./utils/getContactPage');
+
 
 dotenv.config();
 
@@ -67,6 +69,24 @@ app.post('/generate-email', async (req, res) => {
     }
 
     res.status(500).json({ error: message });
+  }
+});
+
+app.post('/get-contact-page', async (req, res) => {
+  const { street, city, state, zipCode } = req.body;
+
+  if (!street || !city || !state || !zipCode) {
+    return res.status(400).json({ error: 'Missing address fields.' });
+  }
+
+  try {
+    const { state: stateAbbr, district } = await getDistrictFromAddress(street, city, state, zipCode);
+    const contactPage = await getContactPage(stateAbbr, district);
+
+    res.status(200).json({ contactPage });
+  } catch (error) {
+    console.error('Error in /get-contact-page:', error.message);
+    res.status(500).json({ error: 'Failed to retrieve contact page.' });
   }
 });
 

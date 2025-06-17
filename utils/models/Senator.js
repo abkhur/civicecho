@@ -1,4 +1,4 @@
-// senator.model.js
+// sSenator.js
 const mongoose = require('mongoose');
 
 const senatorSchema = new mongoose.Schema({
