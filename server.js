@@ -18,6 +18,18 @@ const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cors());
+const allowedOrigins = ['https://civicecho.org', 'https://www.civicecho.org'];
+
+app.use((req, res, next) => {
+  const origin = req.get('Origin') || req.get('Referer') || '';
+  const isAllowed = allowedOrigins.some(o => origin.startsWith(o));
+
+  if (origin && !isAllowed) {
+    return res.status(403).json({ error: 'Forbidden: Invalid origin' });
+  }
+
+  next();
+});
 
 // Connect to MongoDB
 connectDB();
