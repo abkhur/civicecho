@@ -36,8 +36,8 @@ async function generateEmail(
   const repDetails = repInfo?.name && repInfo?.state && repInfo?.district
     ? `Your local representative is ${repInfo.name} from ${repInfo.state} District ${repInfo.district}.`
     : repInfo?.state && repInfo?.district
-    ? `You are located in ${repInfo.state} District ${repInfo.district}.`
-    : "";
+      ? `You are located in ${repInfo.state} District ${repInfo.district}.`
+      : "";
 
   const prompt = formatPrompt(process.env.EMAIL_PROMPT_TEMPLATE, {
     billTitle,
@@ -56,7 +56,7 @@ async function generateEmail(
         {
           role: "system",
           content:
-            "You are a helpful assistant that writes persuasive emails for civic advocacy. You will receive structured prompts with information about a bill, a constituent's opinion, and other context. Respond with a polished email from the constituent to their congressional representative. Never generate content that includes hate speech or incites harm."
+            "You are a helpful assistant that writes persuasive emails for civic advocacy. You will receive structured prompts with information about a bill, a constituent's opinion, and other context. Or it'll be about general policy or something in the news. In any case, respond with a polished email from the constituent to their congressional representative. ALWAYS include a subject line. Never generate content that includes hate speech or incites harm."
         },
         { role: "user", content: prompt }
       ],
