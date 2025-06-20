@@ -11,13 +11,15 @@ const { generateTrendingRss, fetchTrendingIssues } = require('./utils/trendingRs
 const fetchArticleText = require('./utils/rssHelperModules/fetchArticleText');
 const summarizeHeadline = require('./utils/rssHelperModules/summarizeHeadline');
 const Campaign = require('./utils/models/Campaign');
+const rateLimit = require('express-rate-limit');
+
 
 dotenv.config();
 
 const app = express();
 const port = process.env.PORT || 3000;
 app.use(express.json());
-app.use(cors());
+
 const allowedOrigins = ['https://civicecho.org', 'https://www.civicecho.org'];
 
 app.use((req, res, next) => {
@@ -30,12 +32,31 @@ app.use((req, res, next) => {
 
   next();
 });
+app.set('trust proxy', 1);
+
+app.use(cors({
+  origin: allowedOrigins,
+  optionsSuccessStatus: 200
+}));
+
+
+// Limit: 5 requests per minute per IP for expensive endpoints
+const emailLimiter = rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: 5,
+  handler: (req, res) => {
+    console.warn(`Rate limit exceeded: ${req.ip}`);
+    res.status(429).json({ error: 'Too many requests. Please try again in a minute.' });
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Connect to MongoDB
 connectDB();
 
 // Email generation endpoint
-app.post('/generate-email', async (req, res) => {
+app.post('/generate-email', emailLimiter, async (req, res) => {
   const {
     congress,
     billType,
@@ -116,7 +137,7 @@ app.post('/generate-email', async (req, res) => {
 });
 
 // Contact page endpoint
-app.post('/get-contact-page', async (req, res) => {
+app.post('/get-contact-page', emailLimiter, async (req, res) => {
   const { street, city, state, zipCode } = req.body;
   if (!street || !city || !state || !zipCode) {
     return res.status(400).json({ error: 'Missing address fields.' });
@@ -152,7 +173,7 @@ app.get('/trending-issues', async (req, res) => {
   }
 });
 
-app.post('/extract-article', async (req, res) => {
+app.post('/extract-article', emailLimiter, async (req, res) => {
   const { url } = req.body;
   if (!url) {
     return res.status(400).json({ error: 'Missing url field' });
@@ -172,7 +193,7 @@ app.post('/extract-article', async (req, res) => {
 });
 
 //Create campaign
-app.post('/campaigns', async (req, res) => {
+app.post('/campaigns', emailLimiter, async (req, res) => {
   try {
     const { title, description, issueTopic, issueSummary, createdBy } = req.body
     if (!title || !issueTopic) {
