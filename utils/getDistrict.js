@@ -1,40 +1,47 @@
-// utils/getDistrict.js
+require('dotenv').config();
 const axios = require('axios');
 const { stateFipsMap } = require('./stateFipsMap');
 
+const LOCATIONIQ_API_KEY = process.env.LOCATIONIQ_API_KEY;
+
 /**
- * Convert an address to a congressional district using Nominatim and TIGERweb.
+ * Convert an address to a congressional district using LocationIQ and TIGERweb.
  *
  * @param {string} street
  * @param {string} city
  * @param {string} state
  * @param {string} zipCode
- * @returns {Promise<Object>} - Object with state (abbreviation) and district
+ * @returns {Promise<Object>} - Object with state (abbreviation), district (padded), and districtName
  */
 async function getDistrictFromAddress(street, city, state, zipCode) {
   if (!street || !city || !state || !zipCode) {
-    throw new Error("Street, city, state, and ZIP code are required.");
+    throw new Error('Street, city, state, and ZIP code are required.');
   }
 
   try {
-    // 1. Geocode with Nominatim
+    // 1. Forward geocode with LocationIQ
     const fullAddress = `${street}, ${city}, ${state} ${zipCode}`;
-    const nominatimUrl = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(fullAddress)}`;
-
-    const geoRes = await axios.get(nominatimUrl, {
-      headers: {
-        'User-Agent': 'CivicEcho/1.0 (https://civicecho.org; abkhur@vt.edu)'
+    const locIQUrl = 'https://us1.locationiq.com/v1/search.php';
+    const geoRes = await axios.get(locIQUrl, {
+      params: {
+        key: LOCATIONIQ_API_KEY,
+        q: fullAddress,
+        format: 'json',
+        normalizeaddress: 1
       }
     });
 
-    if (!geoRes.data || geoRes.data.length === 0) {
-      throw new Error("No results from Nominatim geocoding.");
+    if (!Array.isArray(geoRes.data) || geoRes.data.length === 0) {
+      throw new Error('No results from LocationIQ geocoding.');
     }
 
-    const { lat, lon } = geoRes.data[0];
+    const { lat: latString, lon: lonString } = geoRes.data[0];
+    const lat = parseFloat(latString);
+    const lon = parseFloat(lonString);
 
-    // 2. Query TIGERweb
-    const tigerUrl = `https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Legislative/MapServer/0/query`;
+    // 2. Query TIGERweb for congressional district
+    const tigerUrl =
+      'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Legislative/MapServer/0/query';
     const tigerParams = {
       f: 'json',
       geometry: `${lon},${lat}`,
@@ -46,10 +53,9 @@ async function getDistrictFromAddress(street, city, state, zipCode) {
     };
 
     const tigerRes = await axios.get(tigerUrl, { params: tigerParams });
-
     const features = tigerRes.data?.features;
     if (!features || features.length === 0) {
-      throw new Error("No congressional district found for these coordinates.");
+      throw new Error('No congressional district found for these coordinates.');
     }
 
     const districtInfo = features[0].attributes;
@@ -66,7 +72,7 @@ async function getDistrictFromAddress(street, city, state, zipCode) {
       districtName: districtInfo.NAME
     };
   } catch (error) {
-    console.error("Error in getDistrictFromAddress:", error.message);
+    console.error('Error in getDistrictFromAddress:', error.message);
     throw error;
   }
 }
