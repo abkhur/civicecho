@@ -1,6 +1,12 @@
+/* server.js */
 const express = require('express');
 const dotenv = require('dotenv');
 const cors = require('cors');
+const morgan = require('morgan');
+const { body, validationResult } = require('express-validator');
+const { createLogger, transports, format } = require('winston');
+const rateLimit = require('express-rate-limit');
+
 const { generateEmailForBill } = require('./utils/generateEmailForBill');
 const { generateEmailForIssue } = require('./utils/generateEmailForIssue');
 const { getDistrictFromAddress } = require('./utils/getDistrict');
@@ -11,233 +17,162 @@ const { generateTrendingRss, fetchTrendingIssues } = require('./utils/trendingRs
 const fetchArticleText = require('./utils/rssHelperModules/fetchArticleText');
 const summarizeHeadline = require('./utils/rssHelperModules/summarizeHeadline');
 const Campaign = require('./utils/models/Campaign');
-const rateLimit = require('express-rate-limit');
 
-
+// Load environment
 dotenv.config();
 
+// Initialize Express
 const app = express();
+app.set('trust proxy', 1);
 const port = process.env.PORT || 3000;
+
+// Winston logger setup
+const logger = createLogger({
+  level: 'info',
+  format: format.combine(
+    format.timestamp(),
+    format.json()
+  ),
+  transports: [new transports.Console()]
+});
+
+// HTTP request logging
+app.use(morgan('combined', { stream: { write: msg => logger.info(msg.trim()) } }));
+
+// JSON body parsing
 app.use(express.json());
 
+// CORS & origin validation
 const allowedOrigins = ['https://civicecho.org', 'https://www.civicecho.org'];
-
 app.use((req, res, next) => {
-  const origin = req.get('Origin') || req.get('Referer') || '';
-  const isAllowed = allowedOrigins.some(o => origin.startsWith(o));
-
-  if (origin && !isAllowed) {
+  const origin = req.get('Origin') || '';
+  if (origin && !allowedOrigins.includes(origin)) {
+    logger.warn('Blocked invalid origin', { origin, path: req.path });
     return res.status(403).json({ error: 'Forbidden: Invalid origin' });
   }
-
   next();
 });
-app.set('trust proxy', 1);
+app.use(cors({ origin: allowedOrigins, optionsSuccessStatus: 200 }));
 
-app.use(cors({
-  origin: allowedOrigins,
-  optionsSuccessStatus: 200
-}));
-
-
-// Limit: 5 requests per minute per IP for expensive endpoints
+// Rate limiting
 const emailLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000,
+  windowMs: 60 * 1000,
   max: 5,
   handler: (req, res) => {
-    console.warn(`Rate limit exceeded: ${req.ip}`);
+    logger.warn('Rate limit exceeded', { ip: req.ip, path: req.path });
     res.status(429).json({ error: 'Too many requests. Please try again in a minute.' });
   },
   standardHeaders: true,
-  legacyHeaders: false,
+  legacyHeaders: false
 });
 
 // Connect to MongoDB
-connectDB();
+connectDB().catch(err => {
+  logger.error('DB connection failed', { message: err.message });
+  process.exit(1);
+});
 
-// Email generation endpoint
-app.post('/generate-email', emailLimiter, async (req, res) => {
-  const {
-    congress,
-    billType,
-    billNumber,
-    resolutionNumber,
-    issueTopic,
-    issueSummary = '',
-    userName,
-    userStance,
-    street,
-    city,
-    state,
-    zipCode,
-    userContext = ''
-  } = req.body;
+// Healthcheck
+app.get('/healthz', (req, res) => res.status(200).send('OK'));
 
-  if (!congress || !billType || !userName || !userStance || !street || !city || !state || !zipCode) {
-    return res.status(400).json({
-      error: 'Missing required parameters. Include congress, billType, userName, userStance, and full address.'
-    });
-  }
+// Validation chains
+const emailValidation = [
+  body('congress').isInt({ min: 1 }),
+  body('userName').isString().trim().notEmpty(),
+  body('billType').isIn(['hr', 'hres', 'issue']),
+  body('street').notEmpty(),
+  body('city').notEmpty(),
+  body('state').notEmpty(),
+  body('zipCode').notEmpty()
+];
 
+// Routes
+app.post('/generate-email', emailLimiter, emailValidation, async (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
   try {
+    const { congress, billType, billNumber, resolutionNumber, issueTopic = '', issueSummary = '', userName, userStance, street, city, state, zipCode, userContext = '' } = req.body;
     const districtInfo = await getDistrictFromAddress(street, city, state, zipCode);
-    const districtNumber = parseInt(districtInfo.district, 10);
-    const repInfo = await getRepresentative(districtInfo.state, districtNumber);
-
+    const repInfo = await getRepresentative(districtInfo.state, parseInt(districtInfo.district, 10));
     let emailContent;
     if (billType === 'issue') {
-      if (!issueTopic) {
-        return res.status(400).json({ error: 'Missing issueTopic for general issue flow.' });
-      }
-      emailContent = await generateEmailForIssue(
-        issueTopic,
-        userName,
-        userStance,
-        repInfo,
-        street,
-        city,
-        state,
-        zipCode,
-        userContext,
-        issueSummary
-      );
+      emailContent = await generateEmailForIssue(issueTopic, userName, userStance, repInfo, street, city, state, zipCode, userContext, issueSummary);
     } else {
       const num = billType === 'hr' ? billNumber : resolutionNumber;
-      if (!num) {
-        return res.status(400).json({ error: 'Missing bill/resolution number for legislative flow.' });
-      }
-      emailContent = await generateEmailForBill(
-        congress,
-        billType,
-        num,
-        userName,
-        userStance,
-        repInfo,
-        street,
-        city,
-        state,
-        zipCode,
-        userContext
-      );
+      emailContent = await generateEmailForBill(congress, billType, num, userName, userStance, repInfo, street, city, state, zipCode, userContext);
     }
-
-    res.status(200).json({ emailContent });
-  } catch (error) {
-    console.error('Error in /generate-email route:', error);
-    let message;
-    if (error.message.includes('No representative')) {
-      message = "We couldn't find a representative for that address.";
-    } else if (error.message.includes('No address matches') || error.message.includes('No results')) {
-      message = 'Address not found. Please enter a valid U.S. address.';
-    } else {
-      message = 'Failed to generate email.';
-    }
-    res.status(500).json({ error: message });
-  }
-});
-
-// Contact page endpoint
-app.post('/get-contact-page', emailLimiter, async (req, res) => {
-  const { street, city, state, zipCode } = req.body;
-  if (!street || !city || !state || !zipCode) {
-    return res.status(400).json({ error: 'Missing address fields.' });
-  }
-  try {
-    const { state: stateAbbr, district } = await getDistrictFromAddress(street, city, state, zipCode);
-    const contactPage = await getContactPage(stateAbbr, district);
-    res.status(200).json({ contactPage });
-  } catch (error) {
-    console.error('Error in /get-contact-page:', error.message);
-    res.status(500).json({ error: 'Failed to retrieve contact page.' });
-  }
-});
-
-// RSS & JSON endpoints
-app.get('/trending-rss.xml', async (req, res) => {
-  try {
-    const xml = await generateTrendingRss();
-    res.type('application/rss+xml').send(xml);
+    res.json({ emailContent });
   } catch (err) {
-    console.error('Error generating trending RSS:', err.message);
-    res.status(500).send('Failed to generate RSS feed');
+    next(err);
   }
 });
 
-app.get('/trending-issues', async (req, res) => {
+app.post('/get-contact-page', emailLimiter, [
+  body('street').notEmpty(),
+  body('city').notEmpty(),
+  body('state').notEmpty(),
+  body('zipCode').notEmpty()
+], async (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
   try {
-    const issues = await fetchTrendingIssues();
-    res.json({ issues });
+    const { state: st, district } = await getDistrictFromAddress(req.body.street, req.body.city, req.body.state, req.body.zipCode);
+    const contactPage = await getContactPage(st, district);
+    res.json({ contactPage });
   } catch (err) {
-    console.error('Error fetching trending issues:', err.message);
-    res.status(500).json({ issues: [] });
+    next(err);
   }
 });
 
-app.post('/extract-article', emailLimiter, async (req, res) => {
-  const { url } = req.body;
-  if (!url) {
-    return res.status(400).json({ error: 'Missing url field' });
-  }
+app.post('/extract-article', emailLimiter, [body('url').isURL()], async (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
   try {
-    // 1️. scrape raw HTML → text
-    const raw = await fetchArticleText(url);
-    // 2️. generate a short headline
-    const title = raw
-      ? (await summarizeHeadline(raw)) || url
-      : url;
+    const raw = await fetchArticleText(req.body.url);
+    const title = raw ? (await summarizeHeadline(raw)) || req.body.url : req.body.url;
     res.json({ title, summary: raw });
   } catch (err) {
-    console.error('Error in /extract-article:', err);
-    res.status(500).json({ error: 'Failed to extract or summarize article' });
+    next(err);
   }
 });
 
-//Create campaign
-app.post('/campaigns', emailLimiter, async (req, res) => {
+app.post('/campaigns', emailLimiter, [body('title').notEmpty(), body('issueTopic').notEmpty()], async (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(422).json({ errors: errors.array() });
   try {
-    const { title, description, issueTopic, issueSummary, createdBy } = req.body
-    if (!title || !issueTopic) {
-      return res.status(400).json({ error: 'Title and issueTopic are required.' })
-    }
-    const camp = await Campaign.create({ title, description, issueTopic, issueSummary, createdBy })
-    res.status(201).json(camp)
+    const camp = await Campaign.create(req.body);
+    res.status(201).json(camp);
   } catch (err) {
-    if (err.code === 11000) {
-      return res.status(409).json({ error: 'A campaign with that title already exists.' })
-    }
-    console.error(err)
-    res.status(500).json({ error: 'Could not create campaign.' })
+    if (err.code === 11000) return res.status(409).json({ error: 'Duplicate campaign' });
+    next(err);
   }
-})
+});
 
-// List
-app.get('/campaigns', async (_req, res) => {
-  const list = await Campaign.find().sort('-createdAt').limit(20).lean()
-  res.json(list)
-})
-
-// Detail
-app.get('/campaigns/:slug', async (req, res) => {
-  const camp = await Campaign.findOne({ slug: req.params.slug }).lean()
-  if (!camp) return res.status(404).json({ error: 'Not found' })
-  res.json(camp)
-})
-
-// Pre-warm RSS cache and then start server
-async function startServer() {
+app.get('/campaigns', async (req, res, next) => {
+  try { const list = await Campaign.find().sort('-createdAt').limit(20); res.json(list); } catch (err) { next(err); }
+});
+app.get('/campaigns/:slug', async (req, res, next) => {
   try {
-    await generateTrendingRss();
-    await fetchTrendingIssues();
-    console.log('Trending feeds pre-fetched and cached');
-  } catch (err) {
-    console.warn('Failed to pre-fetch trending feeds:', err.message);
-  }
+    const camp = await Campaign.findOne({ slug: req.params.slug });
+    if (!camp) return res.status(404).json({ error: 'Not found' });
+    res.json(camp);
+  } catch (err) { next(err); }
+});
 
-  app.listen(port, () => console.log(`Server running on http://localhost:${port}`));
-}
+app.get('/trending-rss.xml', async (req, res, next) => {
+  try { res.type('application/rss+xml').send(await generateTrendingRss()); } catch (err) { next(err); }
+});
+app.get('/trending-issues', async (req, res, next) => {
+  try { res.json({ issues: await fetchTrendingIssues() }); } catch (err) { next(err); }
+});
 
-if (require.main === module) {
-  startServer();
-}
+// Centralized error handler
+app.use((err, req, res, next) => {
+  logger.error('Unhandled error', { message: err.message, stack: err.stack });
+  res.status(err.status || 500).json({ error: err.message || 'Internal Server Error' });
+});
+
+// Start server
+app.listen(port, () => logger.info(`Server running on port ${port}`));
 
 module.exports = app;
