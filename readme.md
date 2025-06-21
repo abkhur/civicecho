@@ -31,7 +31,7 @@ If you're looking for the frontend:
 | Language Model     | OpenAI GPT-3.5            |
 | Scraping           | Axios + Cheerio           |
 | DB                 | MongoDB (via Mongoose)    |
-| Geocoding          | U.S. Census TIGERWeb API  |
+| Geocoding          | U.S. Census TIGERWeb API, LocationIQ  |
 | Metadata           | Congress.gov API          |
 | Testing            | Jest + Supertest          |
 | Environment Config | dotenv                    |
